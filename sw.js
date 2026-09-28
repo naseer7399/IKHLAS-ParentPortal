@@ -3,7 +3,7 @@
 // All actual data (fees, payments, notices) always comes live from
 // Firestore — this never caches student data.
 
-const CACHE_NAME = 'ikhlas-parent-portal-v1';
+const CACHE_NAME = 'ikhlas-parent-portal-v2';
 const APP_SHELL = [
   './',
   './index.html',
