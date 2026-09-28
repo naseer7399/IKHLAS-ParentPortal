@@ -7,6 +7,8 @@
 
 const SESSION_KEY = 'ikhlas_parent_session_v1';
 const SEEN_KEY = 'ikhlas_parent_seen_v1';
+const CLEARED_KEY = 'ikhlas_parent_cleared_v1';
+const POPUP_KEY = 'ikhlas_parent_popup_v1';
 
 const ICONS = {
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c0-3.6 3.4-6.5 7.5-6.5s7.5 2.9 7.5 6.5"/></svg>',
@@ -14,6 +16,7 @@ const ICONS = {
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 4.5 1.5 6 1.5 6h-15S6 12.5 6 8Z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   empty: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M3 12h18M3 17h11"/></svg>',
   megaphone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a2 2 0 0 0 2 2h1l3.5 4.5V6.5L6 11H5a2 2 0 0 0-2 2Z"/><path d="M9.5 6.5 19 3v16l-9.5-3.5"/><path d="M19 9.5a3 3 0 0 1 0 5"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>',
   reminder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13l3 3v13H4z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>'
 };
 
@@ -232,7 +235,8 @@ function startNotifListener() {
   notifUnsub = db.collection('notifications').orderBy('createdAt', 'desc').limit(100)
     .onSnapshot((snap) => {
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      NOTIFS = all.filter(isForMe);
+      const clearedAt = getClearedAt();
+      NOTIFS = all.filter(isForMe).filter((n) => Number(n.createdAt || 0) > clearedAt);
       updateNotifBadge();
       if (activeTab === 'notifications') renderNotifications();
       maybeNotify(NOTIFS);
@@ -267,13 +271,17 @@ function markNotificationsSeen() {
   updateNotifBadge();
 }
 
+function notifHeader() {
+  return `<div class="page-head"><h2>Notices</h2><button class="icon-btn-soft" id="btnNotifSettings" aria-label="Notice settings" title="Settings">${ICONS.gear}</button></div>`;
+}
+
 function renderNotifications() {
   const seen = getSeen();
   if (!NOTIFS.length) {
-    setContent(`<div class="empty-state">${ICONS.empty}<p>No notices yet. Fee reminders and school announcements will appear here.</p></div>`);
+    setContent(notifHeader() + `<div class="empty-state">${ICONS.empty}<p>No notices yet. Fee reminders and school announcements will appear here.</p></div>`);
     return;
   }
-  setContent(NOTIFS.map((n) => `
+  setContent(notifHeader() + NOTIFS.map((n) => `
     <div class="notif-item ${seen[n.id] ? '' : 'unread'}">
       <div class="notif-kind">${n.kind === 'fee_reminder' ? ICONS.reminder : ICONS.megaphone} ${n.kind === 'fee_reminder' ? 'Fee reminder' : 'Announcement'}</div>
       <div class="notif-head"><div class="notif-title">${esc(n.title || '')}</div><div class="notif-time">${relTime(n.createdAt)}</div></div>
@@ -282,32 +290,117 @@ function renderNotifications() {
   `).join(''));
 }
 
+/* ---- Clear all (hides on this device only; parents can't delete school data) ---- */
+function clearedKey() { return CLEARED_KEY + '_' + (RECORD ? RECORD.admissionNo : ''); }
+function getClearedAt() { return Number(localStorage.getItem(clearedKey()) || 0); }
+function clearAllNotices() {
+  const newest = NOTIFS.reduce((m, n) => Math.max(m, Number(n.createdAt || 0)), 0);
+  localStorage.setItem(clearedKey(), String(Math.max(Date.now(), newest)));
+  NOTIFS = [];
+  updateNotifBadge();
+  if (activeTab === 'notifications') renderNotifications();
+}
+
+/* ---- Pop-up preference ---- */
+function popupsWanted() { return localStorage.getItem(POPUP_KEY) !== 'off'; }
+function permState() { return ('Notification' in window) ? Notification.permission : 'unsupported'; }
+
+function openNotifSettings() {
+  closeNotifSettings();
+  let wanted = popupsWanted();
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-backdrop';
+  wrap.id = 'notifSettings';
+  wrap.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Notice settings">
+      <div class="modal-body">
+        <div class="set-row">
+          <div class="set-icon">${ICONS.bell}</div>
+          <div class="set-text">
+            <div class="set-title">Show pop-up on this device</div>
+            <div class="set-desc">Also show a device notification when a new notice arrives. <span class="perm-pill" id="permPill"></span></div>
+          </div>
+          <button class="switch" id="popupSwitch" role="switch" aria-label="Show pop-up on this device"><span class="knob"></span></button>
+        </div>
+        <button class="btn btn-primary btn-with-icon" id="btnAllowPerm">${ICONS.bell} Allow pop-up notifications</button>
+        <p class="small-note perm-help hidden" id="permHelp"></p>
+        <button class="btn btn-danger-outline" id="btnClearAll">Clear all notices</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="btnSetCancel">Cancel</button>
+        <button class="btn btn-primary" id="btnSetDone">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  const sw = wrap.querySelector('#popupSwitch');
+  const pill = wrap.querySelector('#permPill');
+  const allowBtn = wrap.querySelector('#btnAllowPerm');
+  const help = wrap.querySelector('#permHelp');
+
+  function refresh() {
+    sw.classList.toggle('on', wanted);
+    sw.setAttribute('aria-checked', wanted ? 'true' : 'false');
+    const st = permState();
+    pill.className = 'perm-pill ' + (st === 'granted' ? 'ok' : st === 'denied' ? 'bad' : '');
+    pill.textContent = st === 'granted' ? 'Pop-ups allowed' : st === 'denied' ? 'Pop-ups blocked' : st === 'unsupported' ? 'Not supported here' : 'Pop-ups not yet allowed';
+    allowBtn.classList.toggle('hidden', st !== 'default');
+    help.classList.toggle('hidden', st !== 'denied' && st !== 'unsupported');
+    help.textContent = st === 'denied'
+      ? 'Notifications are blocked for this app. Turn them on in your phone or browser site settings, then reopen the app.'
+      : 'This browser does not support pop-up notifications.';
+  }
+  refresh();
+
+  sw.addEventListener('click', () => { wanted = !wanted; refresh(); });
+  allowBtn.addEventListener('click', () => {
+    Promise.resolve(Notification.requestPermission()).then(refresh).catch(refresh);
+  });
+  wrap.querySelector('#btnClearAll').addEventListener('click', () => {
+    if (!NOTIFS.length) { toast('There are no notices to clear.'); return; }
+    if (confirm('Clear all notices from this device? New notices will still arrive.')) {
+      clearAllNotices();
+      closeNotifSettings();
+      toast('All notices cleared.');
+    }
+  });
+  wrap.querySelector('#btnSetCancel').addEventListener('click', closeNotifSettings);
+  wrap.querySelector('#btnSetDone').addEventListener('click', () => {
+    localStorage.setItem(POPUP_KEY, wanted ? 'on' : 'off');
+    closeNotifSettings();
+    toast(wanted ? 'Pop-ups turned on.' : 'Pop-ups turned off.');
+  });
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) closeNotifSettings(); });
+}
+function closeNotifSettings() {
+  const el = document.getElementById('notifSettings');
+  if (el) el.remove();
+}
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#btnNotifSettings')) openNotifSettings();
+});
+
 function maybeNotify(list) {
   if (!('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
+  if (!popupsWanted()) return;
   const seen = getSeen();
   const fresh = list.filter((n) => !seen[n.id] && !notifiedOnce[n.id]);
   fresh.slice(0, 3).forEach((n) => {
     notifiedOnce[n.id] = true;
-    try {
-      new Notification(n.title || 'School notice', { body: n.message || '', icon: 'icon-192.png' });
-    } catch (e) { /* ignore */ }
+    const title = n.title || 'School notice';
+    const opts = { body: n.message || '', icon: 'icon-192.png', tag: n.id };
+    // Service-worker notifications also work on Android, where new Notification() is blocked.
+    if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready.then((reg) => reg.showNotification(title, opts)).catch(() => {
+        try { new Notification(title, opts); } catch (e) { /* ignore */ }
+      });
+    } else {
+      try { new Notification(title, opts); } catch (e) { /* ignore */ }
+    }
   });
 }
 const notifiedOnce = {};
-
-// Ask for notification permission the first time the person opens Notices,
-// so an in-app alert can also show as a system notification while the app
-// is open or recently backgrounded. Never asked on first load — only on
-// an explicit visit to that tab, and only once.
-let askedPermission = false;
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('.tab-btn[data-tab="notifications"]');
-  if (btn && !askedPermission && 'Notification' in window && Notification.permission === 'default') {
-    askedPermission = true;
-    Notification.requestPermission().catch(() => {});
-  }
-});
 
 /* ---------------------------------------------------------------
    Helpers
